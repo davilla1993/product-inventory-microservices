@@ -3,9 +3,11 @@ package com.gbossoufolly.com.orderservice.service;
 import com.gbossoufolly.com.orderservice.dto.InventoryResponse;
 import com.gbossoufolly.com.orderservice.dto.OrderLineItemsDto;
 import com.gbossoufolly.com.orderservice.dto.OrderRequest;
+import com.gbossoufolly.com.orderservice.event.OrderPlacedEvent;
 import com.gbossoufolly.com.orderservice.models.Order;
 import com.gbossoufolly.com.orderservice.models.OrderLineItems;
 import com.gbossoufolly.com.orderservice.repository.OrderRepository;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -19,15 +21,16 @@ import java.util.UUID;
 public class OrderService {
 
     private final OrderRepository orderRepository;
-
     private final WebClient.Builder webClientBuilder;
+    private final KafkaTemplate<String, OrderPlacedEvent> kafkaTemplate;
 
-    public OrderService(OrderRepository orderRepository, WebClient.Builder webClientBuilder) {
+    public OrderService(OrderRepository orderRepository, WebClient.Builder webClientBuilder, KafkaTemplate kafkaTemplate) {
         this.orderRepository = orderRepository;
         this.webClientBuilder = webClientBuilder;
+        this.kafkaTemplate = kafkaTemplate;
     }
 
-    public void placeOrder(OrderRequest orderRequest) throws IllegalAccessException {
+    public String placeOrder(OrderRequest orderRequest) throws IllegalAccessException {
         Order order = new Order();
         order.setOrderNumber(UUID.randomUUID().toString());
 
@@ -41,6 +44,7 @@ public class OrderService {
         List<String> skuCodes = order.getOrderLineItemsList().stream()
                 .map(OrderLineItems::getSkuCode)
                 .toList();
+
 
         // Call Inventory  Service, and place order if product is in
         InventoryResponse[] inventoryResponsesArray = webClientBuilder.build().get()
@@ -56,7 +60,9 @@ public class OrderService {
 
         if(allProductsInStock) {
             orderRepository.save(order);
+            kafkaTemplate.send("notificationTopic", new OrderPlacedEvent(order.getOrderNumber()));
 
+            return "Order Placed Successfully";
         } else {
             throw new IllegalAccessException("Product is not in stock, please try again later");
         }
